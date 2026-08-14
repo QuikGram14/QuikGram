@@ -1,0 +1,359 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String    @id @default(cuid())
+  phoneNumber   String    @unique
+  username      String?   @unique
+  displayName   String?
+  profilePhoto  String?
+  bio           String?
+  
+  // Authentication
+  passwordHash  String
+  twoFactorEnabled Boolean @default(false)
+  twoFactorSecret String?
+  
+  // Status
+  isActive      Boolean   @default(true)
+  isBlocked     Boolean   @default(false)
+  isVerified    Boolean   @default(false)
+  lastSeenAt    DateTime?
+  
+  // Relationships
+  chats         Chat[]    @relation("UserChats")
+  messages      Message[] @relation("UserMessages")
+  groupRoles    GroupRole[]
+  contacts      Contact[] @relation("UserContacts")
+  blockedUsers  BlockedUser[] @relation("UserBlocking")
+  blockedBy     BlockedUser[] @relation("UserBlockedBy")
+  
+  // E2EE Keys
+  publicKey     String?   @db.Text
+  deviceId      String?
+  
+  // Metadata
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  deletedAt     DateTime?
+
+  @@index([phoneNumber])
+  @@index([isBlocked])
+}
+
+model Contact {
+  id            String    @id @default(cuid())
+  userId        String
+  user          User      @relation("UserContacts", fields: [userId], references: [id], onDelete: Cascade)
+  
+  contactUserId String
+  contactUser   User      @relation(fields: [contactUserId], references: [id], onDelete: Cascade)
+  
+  isBlocked     Boolean   @default(false)
+  isFavorite    Boolean   @default(false)
+  
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@unique([userId, contactUserId])
+  @@index([userId])
+}
+
+model BlockedUser {
+  id            String    @id @default(cuid())
+  blockerId     String
+  blocker       User      @relation("UserBlocking", fields: [blockerId], references: [id], onDelete: Cascade)
+  
+  blockedUserId String
+  blockedUser   User      @relation("UserBlockedBy", fields: [blockedUserId], references: [id], onDelete: Cascade)
+  
+  reason        String?
+  createdAt     DateTime  @default(now())
+
+  @@unique([blockerId, blockedUserId])
+  @@index([blockerId])
+  @@index([blockedUserId])
+}
+
+model Chat {
+  id            String    @id @default(cuid())
+  name          String?
+  description   String?
+  photo         String?
+  
+  type          ChatType  @default(PRIVATE)
+  isEncrypted   Boolean   @default(true)
+  
+  // Group specific
+  groupOwnerId  String?
+  groupOwner    User?     @relation("UserChats", fields: [groupOwnerId], references: [id], onDelete: SetNull)
+  
+  users         ChatUser[]
+  messages      Message[]
+  pinnedMessage String?
+  
+  // Settings
+  muteNotifications Boolean @default(false)
+  archiveAt     DateTime?
+  
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  deletedAt     DateTime?
+
+  @@index([type])
+  @@index([groupOwnerId])
+}
+
+enum ChatType {
+  PRIVATE
+  GROUP
+  CHANNEL
+  SECRET
+}
+
+model ChatUser {
+  id            String    @id @default(cuid())
+  chatId        String
+  chat          Chat      @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  
+  userId        String
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  joinedAt      DateTime  @default(now())
+  lastReadAt    DateTime?
+  unreadCount   Int       @default(0)
+
+  @@unique([chatId, userId])
+  @@index([chatId])
+  @@index([userId])
+}
+
+model GroupRole {
+  id            String    @id @default(cuid())
+  userId        String
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  chatId        String
+  role          GroupRoleType @default(MEMBER)
+  
+  canWrite      Boolean   @default(true)
+  canDeleteMsg  Boolean   @default(false)
+  canManageUsers Boolean  @default(false)
+  canPinMsg     Boolean   @default(false)
+  
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@unique([userId, chatId])
+  @@index([chatId])
+}
+
+enum GroupRoleType {
+  OWNER
+  ADMIN
+  MODERATOR
+  MEMBER
+}
+
+model Message {
+  id            String    @id @default(cuid())
+  chatId        String
+  chat          Chat      @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  
+  senderId      String
+  sender        User      @relation("UserMessages", fields: [senderId], references: [id], onDelete: Cascade)
+  
+  content       String    @db.Text
+  encrypted     String?   @db.Text
+  
+  type          MessageType @default(TEXT)
+  
+  // Replies
+  replyToId     String?
+  replyTo       Message?  @relation("MessageReplies", fields: [replyToId], references: [id], onDelete: SetNull)
+  replies       Message[] @relation("MessageReplies")
+  
+  // Reactions
+  reactions     Reaction[]
+  
+  // Files
+  attachments   Attachment[]
+  
+  // Status
+  isEdited      Boolean   @default(false)
+  isDeleted     Boolean   @default(false)
+  deleteFor     String[]  @default([])
+  
+  // Auto-delete
+  selfDestructAt DateTime?
+  
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([chatId])
+  @@index([senderId])
+  @@index([createdAt])
+}
+
+enum MessageType {
+  TEXT
+  PHOTO
+  VIDEO
+  AUDIO
+  FILE
+  VOICE_MESSAGE
+  GIF
+  STICKER
+  LOCATION
+  POLL
+  SYSTEM
+}
+
+model Reaction {
+  id            String    @id @default(cuid())
+  messageId     String
+  message       Message   @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  
+  userId        String
+  emoji         String
+  
+  createdAt     DateTime  @default(now())
+
+  @@unique([messageId, userId])
+  @@index([messageId])
+}
+
+model Attachment {
+  id            String    @id @default(cuid())
+  messageId     String
+  message       Message   @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  
+  type          AttachmentType
+  fileUrl       String
+  fileName      String
+  fileSize      Int
+  mimeType      String
+  
+  width         Int?
+  height        Int?
+  duration      Int?
+  
+  createdAt     DateTime  @default(now())
+
+  @@index([messageId])
+}
+
+enum AttachmentType {
+  IMAGE
+  VIDEO
+  AUDIO
+  DOCUMENT
+  VOICE_MESSAGE
+}
+
+model ModerationLog {
+  id            String    @id @default(cuid())
+  action        ModerationAction
+  
+  targetUserId  String?
+  targetMessageId String?
+  
+  moderatorId   String?
+  reason        String?
+  
+  details       String?   @db.Text
+  
+  createdAt     DateTime  @default(now())
+
+  @@index([targetUserId])
+  @@index([action])
+  @@index([createdAt])
+}
+
+enum ModerationAction {
+  USER_BANNED
+  USER_UNBANNED
+  USER_WARNED
+  MESSAGE_DELETED
+  CHAT_CLOSED
+  SPAM_REPORTED
+  CONTENT_FLAGGED
+  ADMIN_ACTION
+}
+
+model SpamReport {
+  id            String    @id @default(cuid())
+  messageId     String?
+  userId        String?
+  
+  reporterId    String
+  
+  reason        String
+  status        ReportStatus @default(PENDING)
+  
+  reviewedBy    String?
+  reviewedAt    DateTime?
+  
+  createdAt     DateTime  @default(now())
+
+  @@index([status])
+  @@index([reporterId])
+  @@index([createdAt])
+}
+
+enum ReportStatus {
+  PENDING
+  REVIEWING
+  RESOLVED
+  DISMISSED
+}
+
+model Session {
+  id            String    @id @default(cuid())
+  userId        String
+  
+  token         String    @unique @db.Text
+  refreshToken  String    @unique @db.Text
+  
+  deviceId      String?
+  userAgent     String?
+  ipAddress     String?
+  
+  isActive      Boolean   @default(true)
+  expiresAt     DateTime
+  
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model AuditLog {
+  id            String    @id @default(cuid())
+  userId        String?
+  action        String
+  resource      String
+  resourceId    String?
+  
+  oldValue      String?   @db.Text
+  newValue      String?   @db.Text
+  
+  ipAddress     String?
+  userAgent     String?
+  
+  createdAt     DateTime  @default(now())
+
+  @@index([userId])
+  @@index([action])
+  @@index([createdAt])
+}
